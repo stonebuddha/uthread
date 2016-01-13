@@ -1,2 +1,2 @@
-User Level Thread Library
+User-Level Thread Library
 =========================
