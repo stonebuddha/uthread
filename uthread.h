@@ -9,6 +9,7 @@
 #define UTHREAD_CANCELED ((void *) -1)
 
 #define UTHREAD_MUTEX_SIZE 16
+#define UTHREAD_COND_SIZE 8
 
 typedef unsigned long int uthread_t;
 
@@ -33,39 +34,12 @@ int uthread_mutex_unlock(uthread_mutex_t *mutext);
 
 
 typedef struct {
-} uthread_rwlock_t;
-
-int uthread_rwlock_init(uthread_rwlock_t *rwlock);
-int uthread_rwlock_rdlock(uthread_rwlock_t *rwlock);
-int uthread_rwlock_tryrdlock(uthread_rwlock_t *rwlock);
-int uthread_rwlock_wrlock(uthread_rwlock_t *rwlock);
-int uthread_rwlock_trywrlock(uthread_rwlock_t *rwlock);
-int uthread_rwlock_unlock(uthread_rwlock_t *rwlock);
-
-
-typedef struct {
+    char span[UTHREAD_COND_SIZE];
 } uthread_cond_t;
 
 int uthread_cond_init(uthread_cond_t *cond);
-int utherad_cond_destroy(uthread_cond_t *cond);
 int uthread_cond_signal(uthread_cond_t *cond);
 int uthread_cond_broadcast(uthread_cond_t *cond);
 int uthread_cond_wait(uthread_cond_t *cond, uthread_mutex_t *mutex);
-
-
-typedef struct {
-} uthread_spinlock_t;
-
-int uthread_spin_init(uthread_spinlock_t *lock);
-int uthread_spin_lock(uthread_spinlock_t *lock);
-int uthread_spin_trylock(uthread_spinlock_t *lock);
-int uthread_spin_unlock(uthread_spinlock_t *lock);
-
-
-typedef struct {
-} uthread_barrier_t;
-
-int uthread_barrier_init(uthread_barrier_t *barrier);
-int uthread_barrier_wait(uthread_barrier_t *barrier);
 
 #endif

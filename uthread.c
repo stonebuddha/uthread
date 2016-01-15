@@ -331,28 +331,32 @@ int uthread_cancel(uthread_t thread) {
 
 typedef struct _linked_list_t {
     uthread_t tid;
+    void *data;
     struct _linked_list_t *next;
 } linked_list_t;
 
-static void linked_list_put_tail(linked_list_t **des, uthread_t tid) {
+static void linked_list_put_tail(linked_list_t **des, uthread_t tid, void *data) {
     while ((*des) != NULL) {
         des = &((*des)->next);
     }
     (*des) = (linked_list_t *) malloc(sizeof(linked_list_t));
     (*des)->tid = tid;
+    (*des)->data = data;
     (*des)->next = NULL;
 }
 
-static uthread_t linked_list_get_head(linked_list_t **des) {
+static void linked_list_get_head(linked_list_t **des, uthread_t *tid, void **data) {
     linked_list_t *to_del;
-    uthread_t res;
 
     to_del = (*des);
-    res = to_del->tid;
+    if (tid != NULL) {
+        (*tid) = to_del->tid;
+    }
+    if (data != NULL) {
+        (*data) = to_del->data;
+    }
     (*des) = to_del->next;
     free(to_del);
-
-    return res;
 }
 
 static int linked_list_is_empty(linked_list_t *list) {
@@ -363,14 +367,14 @@ static int linked_list_is_empty(linked_list_t *list) {
 typedef struct {
     int locked;
     linked_list_t *wait_list;
-} _uthread_mutex_t;
+} mutex_t;
 
 int uthread_mutex_init(uthread_mutex_t *mutex) {
-    _uthread_mutex_t *p;
+    mutex_t *p;
 
     in_critical = 1;
 
-    p = (_uthread_mutex_t *) mutex;
+    p = (mutex_t *) mutex;
     p->locked = 0;
     p->wait_list = NULL;
 
@@ -379,11 +383,11 @@ int uthread_mutex_init(uthread_mutex_t *mutex) {
 }
 
 int uthread_mutex_trylock(uthread_mutex_t *mutex) {
-    _uthread_mutex_t *p;
+    mutex_t *p;
 
     in_critical = 1;
 
-    p = (_uthread_mutex_t *) mutex;
+    p = (mutex_t *) mutex;
     if (!p->locked) {
         p->locked = 1;
 
@@ -395,11 +399,11 @@ int uthread_mutex_trylock(uthread_mutex_t *mutex) {
 }
 
 int uthread_mutex_lock(uthread_mutex_t *mutex) {
-    _uthread_mutex_t *p;
+    mutex_t *p;
 
     in_critical = 1;
     
-    p = (_uthread_mutex_t *) mutex;
+    p = (mutex_t *) mutex;
     if (!p->locked) {
         p->locked = 1;
         
@@ -412,7 +416,7 @@ int uthread_mutex_lock(uthread_mutex_t *mutex) {
         } else {
             uthread_t previous_thread_id;
 
-            linked_list_put_tail(&p->wait_list, current_thread_id);
+            linked_list_put_tail(&p->wait_list, current_thread_id, NULL);
             previous_thread_id = current_thread_id;
             current_thread_id = get_ready_tid();
 
@@ -424,10 +428,11 @@ int uthread_mutex_lock(uthread_mutex_t *mutex) {
 }
 
 int uthread_mutex_unlock(uthread_mutex_t *mutex) {
-    _uthread_mutex_t *p;
+    mutex_t *p;
 
     in_critical = 1;
 
+    p = (mutex_t *) mutex;
     if (linked_list_is_empty(p->wait_list)) {
         p->locked = 0;
 
@@ -436,10 +441,87 @@ int uthread_mutex_unlock(uthread_mutex_t *mutex) {
     } else {
         uthread_t next_thread_id;
         
-        next_thread_id = linked_list_get_head(&p->wait_list);
+        linked_list_get_head(&p->wait_list, &next_thread_id, NULL);
         put_ready_tid(next_thread_id);
 
         in_critical = 0;
+        return 0;
+    }
+}
+
+
+typedef struct {
+    linked_list_t *wait_list;
+} cond_t;
+
+int uthread_cond_init(uthread_cond_t *cond) {
+    cond_t *p;
+
+    in_critical = 1;
+
+    p = (cond_t *) cond;
+    p->wait_list = NULL;
+
+    in_critical = 0;
+    return 0;
+}
+
+int uthread_cond_signal(uthread_cond_t *cond) {
+    cond_t *p;
+
+    in_critical = 1;
+
+    p = (cond_t *) cond;
+    if (!linked_list_is_empty(p->wait_list)) {
+        uthread_t next_thread_id;
+        mutex_t *mutex;
+
+        linked_list_get_head(&p->wait_list, &next_thread_id, (void **) &mutex);
+        linked_list_put_tail(&mutex->wait_list, next_thread_id, NULL);
+    }
+
+    in_critical = 0;
+    return 0;
+}
+
+int uthread_cond_broadcast(uthread_cond_t *cond) {
+    cond_t *p;
+
+    in_critical = 1;
+
+    p = (cond_t *) cond;
+    while (!linked_list_is_empty(p->wait_list)) {
+        uthread_t next_thread_id;
+        mutex_t *mutex;
+
+        linked_list_get_head(&p->wait_list, &next_thread_id, (void **) &mutex);
+        linked_list_put_tail(&mutex->wait_list, next_thread_id, NULL);
+    }
+
+    in_critical = 0;
+    return 0;
+}
+
+int uthread_cond_wait(uthread_cond_t *cond, uthread_mutex_t *mutex) {
+    cond_t *p;
+    
+    in_critical = 1;
+
+    p = (cond_t *) cond;
+    linked_list_put_tail(&p->wait_list, current_thread_id, (void *) mutex);
+
+    uthread_mutex_unlock(mutex);
+
+    if (is_ready_queue_empty()) {
+        exit(EDEADLK);
+    } else {
+        uthread_t previous_thread_id;
+
+        previous_thread_id = current_thread_id;
+        current_thread_id = get_ready_tid();
+
+        in_critical = 0;
+        swapcontext(&tcbs[previous_thread_id].uc, &tcbs[current_thread_id].uc);
         return 0;
     }
 }
