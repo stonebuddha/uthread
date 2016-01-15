@@ -1,45 +1,36 @@
 #include <stdio.h>
 #include "uthread.h"
 
-long fac(long n) {
-    return (n == 0 ? 1 : n * fac(n - 1));
-}
+long cnt = 0;
+uthread_mutex_t mut;
 
 void *thread(void *arg) {
-    uthread_detach(uthread_self());
-    printf("I am thread %lu\n", uthread_self());
-    int a = rand() % 100000000;
-    while (a --);
-    printf("fac(%ld) = %ld\n", (long) arg, fac((long) arg));
+    int n = 100000;
+    int i;
+
+    for (i = 0; i < n; ++ i) {
+        uthread_mutex_lock(&mut);
+        cnt ++;
+        uthread_mutex_unlock(&mut);
+    }
     return NULL;
 }
 
-void *foo(void *arg) {
-    while (1) {
-        printf("foo\n");
-        uthread_yield();
-    }
-}
-
-void *bar(void *arg) {
-    while (1) {
-        uthread_yield();
-        printf("bar\n");
-    }
-}
-
 int main(int argc, char *argv[]) {
-    long i;
-    uthread_t tid[10];
+    uthread_t tids[10];
+    int i;
 
-    srand(time(NULL));
+    uthread_mutex_init(&mut);
 
-    uthread_create(NULL, foo, NULL);
-    uthread_create(NULL, bar, NULL);
+    for (i = 0; i < 10; ++ i) {
+        uthread_create(&tids[i], thread, NULL);
+    }
 
-    while (1);
+    for (i = 0; i < 10; ++ i) {
+        uthread_join(tids[i], NULL);
+    }
 
-    printf("Hello world!\n");
+    printf("%ld\n", cnt);
 
     return 0;
 }

@@ -327,3 +327,119 @@ int uthread_cancel(uthread_t thread) {
         return 0;
     }
 }
+
+
+typedef struct _linked_list_t {
+    uthread_t tid;
+    struct _linked_list_t *next;
+} linked_list_t;
+
+static void linked_list_put_tail(linked_list_t **des, uthread_t tid) {
+    while ((*des) != NULL) {
+        des = &((*des)->next);
+    }
+    (*des) = (linked_list_t *) malloc(sizeof(linked_list_t));
+    (*des)->tid = tid;
+    (*des)->next = NULL;
+}
+
+static uthread_t linked_list_get_head(linked_list_t **des) {
+    linked_list_t *to_del;
+    uthread_t res;
+
+    to_del = (*des);
+    res = to_del->tid;
+    (*des) = to_del->next;
+    free(to_del);
+
+    return res;
+}
+
+static int linked_list_is_empty(linked_list_t *list) {
+    return (list == NULL);
+}
+
+
+typedef struct {
+    int locked;
+    linked_list_t *wait_list;
+} _uthread_mutex_t;
+
+int uthread_mutex_init(uthread_mutex_t *mutex) {
+    _uthread_mutex_t *p;
+
+    in_critical = 1;
+
+    p = (_uthread_mutex_t *) mutex;
+    p->locked = 0;
+    p->wait_list = NULL;
+
+    in_critical = 0;
+    return 0;
+}
+
+int uthread_mutex_trylock(uthread_mutex_t *mutex) {
+    _uthread_mutex_t *p;
+
+    in_critical = 1;
+
+    p = (_uthread_mutex_t *) mutex;
+    if (!p->locked) {
+        p->locked = 1;
+
+        in_critical = 0;
+        return 0;
+    } else {
+        return -1;
+    }
+}
+
+int uthread_mutex_lock(uthread_mutex_t *mutex) {
+    _uthread_mutex_t *p;
+
+    in_critical = 1;
+    
+    p = (_uthread_mutex_t *) mutex;
+    if (!p->locked) {
+        p->locked = 1;
+        
+        in_critical = 0;
+        return 0;
+    } else {
+        if (is_ready_queue_empty()) {
+            in_critical = 0;
+            return EDEADLK;
+        } else {
+            uthread_t previous_thread_id;
+
+            linked_list_put_tail(&p->wait_list, current_thread_id);
+            previous_thread_id = current_thread_id;
+            current_thread_id = get_ready_tid();
+
+            in_critical = 0;
+            swapcontext(&tcbs[previous_thread_id].uc, &tcbs[current_thread_id].uc);
+            return 0;
+        }
+    }
+}
+
+int uthread_mutex_unlock(uthread_mutex_t *mutex) {
+    _uthread_mutex_t *p;
+
+    in_critical = 1;
+
+    if (linked_list_is_empty(p->wait_list)) {
+        p->locked = 0;
+
+        in_critical = 0;
+        return 0;
+    } else {
+        uthread_t next_thread_id;
+        
+        next_thread_id = linked_list_get_head(&p->wait_list);
+        put_ready_tid(next_thread_id);
+
+        in_critical = 0;
+        return 0;
+    }
+}
