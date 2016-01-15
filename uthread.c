@@ -311,7 +311,49 @@ int uthread_equal(uthread_t t1, uthread_t t2) {
 }
 
 void uthread_yield() {
-    schedule(0);
+    in_critical = 1;
+
+    if (is_ready_queue_empty()) {
+        in_critical = 0;
+        return;
+    } else {
+        uthread_t previous_thread_id;
+        int flag = 0;
+
+        put_ready_tid(current_thread_id);
+        previous_thread_id = current_thread_id;
+        while (!is_ready_queue_empty()) {
+            current_thread_id = get_ready_tid();
+            
+            if (!tcbs[current_thread_id].canceled) {
+                flag = 1;
+                break;
+            } else {
+                if (tcbs[current_thread_id].detached) {
+                    tcbs[current_thread_id].valid = 0;
+                } else {
+                    tcbs[current_thread_id].retval = UTHREAD_CANCELED;
+                    tcbs[current_thread_id].exited = 1;
+
+                    if (tcbs[current_thread_id].joined != POOL_SIZE) {
+                        tcbs[current_thread_id].valid = 0;
+
+                        if (tcbs[current_thread_id].joined_retval != NULL) {
+                            (*tcbs[current_thread_id].joined_retval) = UTHREAD_CANCELED;
+                        }
+                        put_ready_tid(tcbs[current_thread_id].joined);
+                    }
+                }
+            }
+        }
+
+        if (flag) {
+            in_critical = 0;
+            swapcontext(&tcbs[previous_thread_id].uc, &tcbs[current_thread_id].uc);
+        }
+    }
+
+    in_critical = 0;
 }
 
 int uthread_cancel(uthread_t thread) {
