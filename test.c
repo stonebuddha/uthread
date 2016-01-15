@@ -6,11 +6,26 @@ long fac(long n) {
 }
 
 void *thread(void *arg) {
+    uthread_detach(uthread_self());
     printf("I am thread %lu\n", uthread_self());
     int a = rand() % 100000000;
     while (a --);
     printf("fac(%ld) = %ld\n", (long) arg, fac((long) arg));
     return NULL;
+}
+
+void *foo(void *arg) {
+    while (1) {
+        printf("foo\n");
+        uthread_yield();
+    }
+}
+
+void *bar(void *arg) {
+    while (1) {
+        uthread_yield();
+        printf("bar\n");
+    }
 }
 
 int main(int argc, char *argv[]) {
@@ -19,13 +34,10 @@ int main(int argc, char *argv[]) {
 
     srand(time(NULL));
 
-    for (i = 0; i < 10; i++) {
-        uthread_create(&tid[i], thread, (void *) i);
-    }
+    uthread_create(NULL, foo, NULL);
+    uthread_create(NULL, bar, NULL);
 
-    for (i = 0; i < 10; i++) {
-        uthread_join(tid[i], NULL);
-    }
+    while (1);
 
     printf("Hello world!\n");
 

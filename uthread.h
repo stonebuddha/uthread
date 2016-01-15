@@ -6,15 +6,13 @@
 #define UTHREAD_H
 
 
-#define UTHREAD_STACK_SIZE 4096
-#define UTHREAD_POOL_SIZE 1024
-#define UTHREAD_TIME_SLICE 10000
+#define UTHREAD_CANCELED ((void *) -1)
 
 typedef unsigned long int uthread_t;
 
 int uthread_create(uthread_t *thread, void *(*start_routine) (void *), void *arg);
 void uthread_exit(void *retval);
-int uthread_join(uthread_t thread, void **status);
+int uthread_join(uthread_t thread, void **retval);
 int uthread_detach(uthread_t thread);
 uthread_t uthread_self(void);
 int uthread_equal(uthread_t t1, uthread_t t2);
@@ -22,7 +20,6 @@ int uthread_equal(uthread_t t1, uthread_t t2);
 void uthread_yield(void);
 
 int uthread_cancel(uthread_t thread);
-void uthread_testcancel(void);
 
 
 typedef struct {
