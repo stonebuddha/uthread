@@ -6,21 +6,18 @@
 #define UTHREAD_H
 
 
-typedef struct {
-} uthread_t;
+#define UTHREAD_STACK_SIZE 4096
+#define UTHREAD_POOL_SIZE 1024
+#define UTHREAD_TIME_SLICE 10000
 
-typedef struct {
-} uthread_attr_t;
+typedef unsigned long int uthread_t;
 
-int uthread_create(uthread_t *thread, uthread_attr_t *attr, void *(*start_routine) (void *), void *arg);
+int uthread_create(uthread_t *thread, void *(*start_routine) (void *), void *arg);
 void uthread_exit(void *retval);
 int uthread_join(uthread_t thread, void **status);
 int uthread_detach(uthread_t thread);
 uthread_t uthread_self(void);
 int uthread_equal(uthread_t t1, uthread_t t2);
-
-int uthread_attr_init(uthread_attr_t *attr);
-int uthread_attr_destroy(uthread_attr_t *attr);
 
 void uthread_yield(void);
 
