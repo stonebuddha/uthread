@@ -16,7 +16,7 @@ typedef unsigned long int uthread_t;
 
 
 /* Create a new thread, starting with execution of START-ROUTINE
- * getting passed ARG. The new handle is stored in *THREAD.
+ * getting passed ARG. The new identifier is stored in *THREAD.
  */
 int uthread_create(uthread_t *thread, void *(*start_routine) (void *), void *arg);
 
@@ -74,7 +74,7 @@ int uthread_mutex_lock(uthread_mutex_t *mutex);
 
 /* Unlock a mutex.
  */
-int uthread_mutex_unlock(uthread_mutex_t *mutext);
+int uthread_mutex_unlock(uthread_mutex_t *mutex);
 
 
 /* Conditional variable handling.

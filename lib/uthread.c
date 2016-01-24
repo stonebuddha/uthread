@@ -228,7 +228,7 @@ static int uthread_init() {
  */
 
 /* Create a new thread, starting with execution of START-ROUTINE
- * getting passed ARG. The new handle is stored in *THREAD.
+ * getting passed ARG. The new identifier is stored in *THREAD.
  */
 int uthread_create(uthread_t *thread, void *(*start_routine) (void *), void *arg) {
     thread_control_block *tcb;
