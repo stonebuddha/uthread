@@ -12,9 +12,9 @@
 /* Constants.
  */
 
-#define STACK_SIZE 4096
-#define POOL_SIZE 1024
-#define TIME_SLICE 10000
+#define STACK_SIZE  4096
+#define POOL_SIZE   1024
+#define TIME_SLICE  10000
 
 
 /* Thread control block.
@@ -141,17 +141,19 @@ static void schedule(int sig) {
                 // if the thread is detached, simply set the valid flag
                 if (tcbs[current_thread_id].detached) {
                     tcbs[current_thread_id].valid = 0;
+                    put_fresh_tid(current_thread_id);
                 } else {
                     tcbs[current_thread_id].retval = UTHREAD_CANCELED;
                     tcbs[current_thread_id].exited = 1;
 
                     if (tcbs[current_thread_id].joined != POOL_SIZE) {
-                        tcbs[current_thread_id].valid = 0;
-
                         if (tcbs[current_thread_id].joined_retval != NULL) {
                             (*tcbs[current_thread_id].joined_retval) = UTHREAD_CANCELED;
                         }
                         put_ready_tid(tcbs[current_thread_id].joined);
+
+                        tcbs[current_thread_id].valid = 0;
+                        put_fresh_tid(current_thread_id);
                     }
                 }
             }
@@ -203,6 +205,9 @@ static int uthread_init() {
     tcb->valid = 1;
     tcb->exited = 0;
     tcb->detached = 1;
+    tcb->canceled = 0;
+    tcb->retval = NULL;
+    tcb->joined_retval = NULL;
     current_thread_id = main_thread_id;
 
     // set up time slice, using SETITIMER
@@ -258,6 +263,9 @@ int uthread_create(uthread_t *thread, void *(*start_routine) (void *), void *arg
     tcb->valid = 1;
     tcb->exited = 0;
     tcb->detached = 0;
+    tcb->canceled = 0;
+    tcb->retval = NULL;
+    tcb->joined_retval = NULL;
     makecontext(&tcb->uc, (void (*) (void)) thread_stub, 2, start_routine, arg);
 
     put_ready_tid(tid);
@@ -275,12 +283,14 @@ void uthread_exit(void *retval) {
     // otherwise wake up the joiner
     if (tcbs[current_thread_id].detached) {
         tcbs[current_thread_id].valid = 0;
+        put_fresh_tid(current_thread_id);
     } else {
         tcbs[current_thread_id].retval = retval;
         tcbs[current_thread_id].exited = 1;
 
         if (tcbs[current_thread_id].joined != POOL_SIZE) {
             tcbs[current_thread_id].valid = 0;
+            put_fresh_tid(current_thread_id);
 
             if (tcbs[current_thread_id].joined_retval != NULL) {
                 (*tcbs[current_thread_id].joined_retval) = retval;
@@ -292,10 +302,43 @@ void uthread_exit(void *retval) {
     if (is_ready_queue_empty()) {
         exit(0);
     } else {
-        current_thread_id = get_ready_tid();
+        int flag = 0;
 
-        in_critical = 0;
-        setcontext(&tcbs[current_thread_id].uc);
+        while (!is_ready_queue_empty()) {
+            current_thread_id = get_ready_tid();
+            
+            // deal with the canceled threads
+            if (!tcbs[current_thread_id].canceled) {
+                flag = 1;
+                break;
+            } else {
+                // if the thread is detached, simply set the valid flag
+                if (tcbs[current_thread_id].detached) {
+                    tcbs[current_thread_id].valid = 0;
+                    put_fresh_tid(current_thread_id);
+                } else {
+                    tcbs[current_thread_id].retval = UTHREAD_CANCELED;
+                    tcbs[current_thread_id].exited = 1;
+
+                    if (tcbs[current_thread_id].joined != POOL_SIZE) {
+                        if (tcbs[current_thread_id].joined_retval != NULL) {
+                            (*tcbs[current_thread_id].joined_retval) = UTHREAD_CANCELED;
+                        }
+                        put_ready_tid(tcbs[current_thread_id].joined);
+
+                        tcbs[current_thread_id].valid = 0;
+                        put_fresh_tid(current_thread_id);
+                    }
+                }
+            }
+        }
+
+        if (flag) {
+            in_critical = 0;
+            setcontext(&tcbs[current_thread_id].uc);
+        } else {
+            exit(0);
+        }
     }
 }
 
@@ -305,7 +348,7 @@ void uthread_exit(void *retval) {
 int uthread_join(uthread_t thread, void **retval) {
     in_critical = 1;
 
-    if (thread >= POOL_SIZE || !tcbs[thread].valid) {
+    if (thread >= POOL_SIZE || !tcbs[thread].valid || thread == current_thread_id) {
         in_critical = 0;
         return ESRCH;
     } else {
@@ -322,23 +365,57 @@ int uthread_join(uthread_t thread, void **retval) {
                     return EDEADLK;
                 } else {
                     uthread_t previous_thread_id;
+                    int flag = 0;
 
                     // set the joiner in the thread control block of joinee
                     tcbs[thread].joined = current_thread_id;
                     tcbs[thread].joined_retval = retval;
 
                     previous_thread_id = current_thread_id;
-                    current_thread_id = get_ready_tid();
+                    while (!is_ready_queue_empty()) {
+                        current_thread_id = get_ready_tid();
 
-                    in_critical = 0;
-                    swapcontext(&tcbs[previous_thread_id].uc, &tcbs[current_thread_id].uc);
-                    return 0;
+                        // deal with the canceled threads
+                        if (!tcbs[current_thread_id].canceled) {
+                            flag = 1;
+                            break;
+                        } else {
+                            // if the thread is detached, simply set the valid flag
+                            if (tcbs[current_thread_id].detached) {
+                                tcbs[current_thread_id].valid = 0;
+                                put_fresh_tid(current_thread_id);
+                            } else {
+                                tcbs[current_thread_id].retval = UTHREAD_CANCELED;
+                                tcbs[current_thread_id].exited = 1;
+
+                                if (tcbs[current_thread_id].joined != POOL_SIZE) {
+                                    if (tcbs[current_thread_id].joined_retval != NULL) {
+                                        (*tcbs[current_thread_id].joined_retval) = UTHREAD_CANCELED;
+                                    }
+                                    put_ready_tid(tcbs[current_thread_id].joined);
+
+                                    tcbs[current_thread_id].valid = 0;
+                                    put_fresh_tid(current_thread_id);
+                                }
+                            }
+                        }
+                    }
+
+                    if (flag) {
+                        in_critical = 0;
+                        swapcontext(&tcbs[previous_thread_id].uc, &tcbs[current_thread_id].uc);
+                        return 0;
+                    } else {
+                        exit(EDEADLK);
+                    }
                 }
             }
         } else {
             if (retval != NULL) {
                 (*retval) = tcbs[thread].retval;
             }
+            tcbs[thread].valid = 0;
+            put_fresh_tid(thread);
             
             in_critical = 0;
             return 0;
@@ -408,17 +485,19 @@ void uthread_yield() {
                 // if the thread is detached, simply set the valid flag
                 if (tcbs[current_thread_id].detached) {
                     tcbs[current_thread_id].valid = 0;
+                    put_fresh_tid(current_thread_id);
                 } else {
                     tcbs[current_thread_id].retval = UTHREAD_CANCELED;
                     tcbs[current_thread_id].exited = 1;
 
                     if (tcbs[current_thread_id].joined != POOL_SIZE) {
-                        tcbs[current_thread_id].valid = 0;
-
                         if (tcbs[current_thread_id].joined_retval != NULL) {
                             (*tcbs[current_thread_id].joined_retval) = UTHREAD_CANCELED;
                         }
                         put_ready_tid(tcbs[current_thread_id].joined);
+
+                        tcbs[current_thread_id].valid = 0;
+                        put_fresh_tid(current_thread_id);
                     }
                 }
             }
@@ -435,12 +514,12 @@ void uthread_yield() {
     }
 }
 
-/* Cancel THREAD immediately.
+/* Cancel THREAD (not immediately).
  */
 int uthread_cancel(uthread_t thread) {
     in_critical = 1;
 
-    if (thread >= POOL_SIZE || !tcbs[thread].valid) {
+    if (thread >= POOL_SIZE || !tcbs[thread].valid || thread == current_thread_id) {
         in_critical = 0;
         return ESRCH;
     } else {
@@ -569,15 +648,48 @@ int uthread_mutex_lock(uthread_mutex_t *mutex) {
             return EDEADLK;
         } else {
             uthread_t previous_thread_id;
+            int flag = 0;
 
             // put the current thread to the wait list
             linked_list_put_tail(&p->wait_list, &p->wait_list_tail, current_thread_id, NULL);
             previous_thread_id = current_thread_id;
-            current_thread_id = get_ready_tid();
+            
+            while (!is_ready_queue_empty()) {
+                current_thread_id = get_ready_tid();
+            
+                // deal with the canceled threads
+                if (!tcbs[current_thread_id].canceled) {
+                    flag = 1;
+                    break;
+                } else {
+                    // if the thread is detached, simply set the valid flag
+                    if (tcbs[current_thread_id].detached) {
+                        tcbs[current_thread_id].valid = 0;
+                        put_fresh_tid(current_thread_id);
+                    } else {
+                        tcbs[current_thread_id].retval = UTHREAD_CANCELED;
+                        tcbs[current_thread_id].exited = 1;
 
-            in_critical = 0;
-            swapcontext(&tcbs[previous_thread_id].uc, &tcbs[current_thread_id].uc);
-            return 0;
+                        if (tcbs[current_thread_id].joined != POOL_SIZE) {
+                            if (tcbs[current_thread_id].joined_retval != NULL) {
+                                (*tcbs[current_thread_id].joined_retval) = UTHREAD_CANCELED;
+                            }
+                            put_ready_tid(tcbs[current_thread_id].joined);
+
+                            tcbs[current_thread_id].valid = 0;
+                            put_fresh_tid(current_thread_id);
+                        }
+                    }
+                }
+            }
+
+            if (flag) {
+                in_critical = 0;
+                swapcontext(&tcbs[previous_thread_id].uc, &tcbs[current_thread_id].uc);
+                return 0;
+            } else {
+                exit(EDEADLK);
+            }
         }
     }
 }
@@ -692,12 +804,162 @@ int uthread_cond_wait(uthread_cond_t *cond, uthread_mutex_t *mutex) {
         exit(EDEADLK);
     } else {
         uthread_t previous_thread_id;
+        int flag = 0;
 
         previous_thread_id = current_thread_id;
-        current_thread_id = get_ready_tid();
+
+        while (!is_ready_queue_empty()) {
+            current_thread_id = get_ready_tid();
+            
+            // deal with the canceled threads
+            if (!tcbs[current_thread_id].canceled) {
+                flag = 1;
+                break;
+            } else {
+                // if the thread is detached, simply set the valid flag
+                if (tcbs[current_thread_id].detached) {
+                    tcbs[current_thread_id].valid = 0;
+                    put_fresh_tid(current_thread_id);
+                } else {
+                    tcbs[current_thread_id].retval = UTHREAD_CANCELED;
+                    tcbs[current_thread_id].exited = 1;
+
+                    if (tcbs[current_thread_id].joined != POOL_SIZE) {
+                        if (tcbs[current_thread_id].joined_retval != NULL) {
+                            (*tcbs[current_thread_id].joined_retval) = UTHREAD_CANCELED;
+                        }
+                        put_ready_tid(tcbs[current_thread_id].joined);
+
+                        tcbs[current_thread_id].valid = 0;
+                        put_fresh_tid(current_thread_id);
+                    }
+                }
+            }
+        }
+
+        if (flag) {
+            in_critical = 0;
+            swapcontext(&tcbs[previous_thread_id].uc, &tcbs[current_thread_id].uc);
+            return 0;
+        } else {
+            exit(EDEADLK);
+        }
+    }
+}
+
+
+/* Semaphore handling.
+ */
+
+typedef struct {
+    long cnt;
+    linked_list_t *wait_list;       // linked list of threads waiting for this semaphore
+    linked_list_t *wait_list_tail;  // record the tail of the linked list
+} sem_t;
+
+/* Initialize a semaphore.
+ */
+int uthread_sem_init(uthread_sem_t *sem, long cnt) {
+    sem_t *p;
+
+    in_critical = 1;
+
+    p = (sem_t *) sem;
+    p->cnt = cnt;
+    p->wait_list = NULL;
+    p->wait_list_tail = NULL;
+
+    in_critical = 0;
+    return 0;
+}
+
+/* Down a semaphore.
+ */
+int uthread_sem_down(uthread_sem_t *sem) {
+    sem_t *p;
+
+    in_critical = 1;
+
+    p = (sem_t *) sem;
+    if (p->cnt > 0) {
+        -- p->cnt;
 
         in_critical = 0;
-        swapcontext(&tcbs[previous_thread_id].uc, &tcbs[current_thread_id].uc);
+        return 0;
+    } else {
+        if (is_ready_queue_empty()) {
+            in_critical = 0;
+            return EDEADLK;
+        } else {
+            uthread_t previous_thread_id;
+            int flag = 0;
+
+            // put the current thread to the wait list
+            linked_list_put_tail(&p->wait_list, &p->wait_list_tail, current_thread_id, NULL);
+            previous_thread_id = current_thread_id;
+            
+            while (!is_ready_queue_empty()) {
+                current_thread_id = get_ready_tid();
+            
+                // deal with the canceled threads
+                if (!tcbs[current_thread_id].canceled) {
+                    flag = 1;
+                    break;
+                } else {
+                    // if the thread is detached, simply set the valid flag
+                    if (tcbs[current_thread_id].detached) {
+                        tcbs[current_thread_id].valid = 0;
+                        put_fresh_tid(current_thread_id);
+                    } else {
+                        tcbs[current_thread_id].retval = UTHREAD_CANCELED;
+                        tcbs[current_thread_id].exited = 1;
+
+                        if (tcbs[current_thread_id].joined != POOL_SIZE) {
+                            if (tcbs[current_thread_id].joined_retval != NULL) {
+                                (*tcbs[current_thread_id].joined_retval) = UTHREAD_CANCELED;
+                            }
+                            put_ready_tid(tcbs[current_thread_id].joined);
+
+                            tcbs[current_thread_id].valid = 0;
+                            put_fresh_tid(current_thread_id);
+                        }
+                    }
+                }
+            }
+
+            if (flag) {
+                in_critical = 0;
+                swapcontext(&tcbs[previous_thread_id].uc, &tcbs[current_thread_id].uc);
+                return 0;
+            } else {
+                exit(EDEADLK);
+            }
+        }
+    }
+}
+
+/* Up a semaphore.
+ */
+int uthread_sem_up(uthread_sem_t *sem) {
+    sem_t *p;
+
+    in_critical = 1;
+
+    p = (sem_t *) sem;
+    // if the wait list is empty, add to CNT
+    // otherwise wake up a thread
+    if (linked_list_is_empty(p->wait_list)) {
+        ++ p->cnt;
+
+        in_critical = 0;
+        return 0;
+    } else {
+        uthread_t next_thread_id;
+        
+        linked_list_get_head(&p->wait_list, &p->wait_list_tail, &next_thread_id, NULL);
+        put_ready_tid(next_thread_id);
+
+        in_critical = 0;
         return 0;
     }
 }

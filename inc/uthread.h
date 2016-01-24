@@ -6,10 +6,11 @@
 #define UTHREAD_H
 
 
-#define UTHREAD_CANCELED ((void *) -1)
+#define UTHREAD_CANCELED    ((void *) -1)
 
-#define UTHREAD_MUTEX_SIZE 24
-#define UTHREAD_COND_SIZE 16
+#define UTHREAD_MUTEX_SIZE  24
+#define UTHREAD_COND_SIZE   16
+#define UTHREAD_SEM_SIZE    24
 
 typedef unsigned long int uthread_t;
 
@@ -47,7 +48,7 @@ int uthread_equal(uthread_t t1, uthread_t t2);
  */
 void uthread_yield(void);
 
-/* Cancel THREAD immediately.
+/* Cancel THREAD (not immediately).
  */
 int uthread_cancel(uthread_t thread);
 
@@ -100,5 +101,24 @@ int uthread_cond_broadcast(uthread_cond_t *cond);
  */
 int uthread_cond_wait(uthread_cond_t *cond, uthread_mutex_t *mutex);
 
+
+/* Semaphore handling.
+ */
+
+typedef struct {
+    char span[UTHREAD_SEM_SIZE];
+} uthread_sem_t;
+
+/* Initialize a semaphore.
+ */
+int uthread_sem_init(uthread_sem_t *sem, long cnt);
+
+/* Down a semaphore.
+ */
+int uthread_sem_down(uthread_sem_t *sem);
+
+/* Up a semaphore.
+ */
+int uthread_sem_up(uthread_sem_t *sem);
 
 #endif
