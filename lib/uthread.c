@@ -121,6 +121,7 @@ static int is_ready_queue_empty() {
 /* A round-robin scheduler, implemented as a signal controller.
  */
 static void schedule(int sig) {
+    // if the current thread is in library functions or there's no ready thread, do nothing
     if (in_critical || is_ready_queue_empty()) {
         return;
     } else {
@@ -132,10 +133,12 @@ static void schedule(int sig) {
         while (!is_ready_queue_empty()) {
             current_thread_id = get_ready_tid();
             
+            // deal with the canceled threads
             if (!tcbs[current_thread_id].canceled) {
                 flag = 1;
                 break;
             } else {
+                // if the thread is detached, simply set the valid flag
                 if (tcbs[current_thread_id].detached) {
                     tcbs[current_thread_id].valid = 0;
                 } else {
@@ -179,6 +182,8 @@ static int uthread_init() {
         put_fresh_tid(tid);
     }
 
+    // set the signal handler as the scheduler, and
+    // the scheduler itselt cannot be interrupted
     scheduler.sa_handler = schedule;
     scheduler.sa_flags = SA_RESTART;
     sigemptyset(&scheduler.sa_mask);
@@ -187,6 +192,7 @@ static int uthread_init() {
         return tmp;
     }
 
+    // set up the main thread
     main_thread_id = get_fresh_tid();
     if (main_thread_id == POOL_SIZE) {
         return -1;
@@ -199,6 +205,7 @@ static int uthread_init() {
     tcb->detached = 1;
     current_thread_id = main_thread_id;
 
+    // set up time slice, using SETITIMER
     time_slice.it_value.tv_sec = 0;
     time_slice.it_value.tv_usec = TIME_SLICE;
     time_slice.it_interval = time_slice.it_value;
@@ -232,6 +239,7 @@ int uthread_create(uthread_t *thread, void *(*start_routine) (void *), void *arg
         }
     }
 
+    // get a fresh identifier
     if (is_fresh_queue_empty()) {
         in_critical = 0;
         return EAGAIN;
@@ -241,6 +249,7 @@ int uthread_create(uthread_t *thread, void *(*start_routine) (void *), void *arg
         (*thread) = tid;
     }
 
+    // initialize the thread control block
     tcb = &tcbs[tid];
     getcontext(&tcb->uc);
     tcb->uc.uc_stack.ss_sp = (void *) tcb->stack;
@@ -262,6 +271,8 @@ int uthread_create(uthread_t *thread, void *(*start_routine) (void *), void *arg
 void uthread_exit(void *retval) {
     in_critical = 1;
 
+    // if the thread is detached, simply set the valid flag
+    // otherwise wake up the joiner
     if (tcbs[current_thread_id].detached) {
         tcbs[current_thread_id].valid = 0;
     } else {
@@ -312,6 +323,7 @@ int uthread_join(uthread_t thread, void **retval) {
                 } else {
                     uthread_t previous_thread_id;
 
+                    // set the joiner in the thread control block of joinee
                     tcbs[thread].joined = current_thread_id;
                     tcbs[thread].joined_retval = retval;
 
@@ -375,6 +387,7 @@ int uthread_equal(uthread_t t1, uthread_t t2) {
 void uthread_yield() {
     in_critical = 1;
 
+    // the code is like SCHEDULE
     if (is_ready_queue_empty()) {
         in_critical = 0;
         return;
@@ -387,10 +400,12 @@ void uthread_yield() {
         while (!is_ready_queue_empty()) {
             current_thread_id = get_ready_tid();
             
+            // deal with the canceled threads
             if (!tcbs[current_thread_id].canceled) {
                 flag = 1;
                 break;
             } else {
+                // if the thread is detached, simply set the valid flag
                 if (tcbs[current_thread_id].detached) {
                     tcbs[current_thread_id].valid = 0;
                 } else {
@@ -412,10 +427,12 @@ void uthread_yield() {
         if (flag) {
             in_critical = 0;
             swapcontext(&tcbs[previous_thread_id].uc, &tcbs[current_thread_id].uc);
+        } else {
+            in_critical = 0;
         }
-    }
 
-    in_critical = 0;
+        return;
+    }
 }
 
 /* Cancel THREAD immediately.
@@ -427,6 +444,7 @@ int uthread_cancel(uthread_t thread) {
         in_critical = 0;
         return ESRCH;
     } else {
+        // simply set the canceled flag
         tcbs[thread].canceled = 1;
         
         in_critical = 0;
@@ -446,19 +464,26 @@ typedef struct _linked_list_t {
 
 /* Put on the tail of the linked list.
  */
-static void linked_list_put_tail(linked_list_t **des, uthread_t tid, void *data) {
-    while ((*des) != NULL) {
-        des = &((*des)->next);
+static void linked_list_put_tail(linked_list_t **des, linked_list_t **tail, uthread_t tid, void *data) {
+    linked_list_t *to_ins = (linked_list_t *) malloc(sizeof(linked_list_t));
+
+    to_ins->tid = tid;
+    to_ins->data = data;
+    to_ins->next = NULL;
+
+    if ((*des) == NULL) {
+        (*des) = to_ins;
+        (*tail) = to_ins;
+    } else {
+        des = &((*tail)->next);
+        (*des) = to_ins;
+        (*tail) = to_ins;
     }
-    (*des) = (linked_list_t *) malloc(sizeof(linked_list_t));
-    (*des)->tid = tid;
-    (*des)->data = data;
-    (*des)->next = NULL;
 }
 
 /* Get the head of the linked list.
  */
-static void linked_list_get_head(linked_list_t **des, uthread_t *tid, void **data) {
+static void linked_list_get_head(linked_list_t **des, linked_list_t **tail, uthread_t *tid, void **data) {
     linked_list_t *to_del;
 
     to_del = (*des);
@@ -470,6 +495,9 @@ static void linked_list_get_head(linked_list_t **des, uthread_t *tid, void **dat
     }
     (*des) = to_del->next;
     free(to_del);
+    if ((*des) == NULL) {
+        (*tail) = NULL;
+    }
 }
 
 /* Check if the linked list is empty.
@@ -483,8 +511,9 @@ static int linked_list_is_empty(linked_list_t *list) {
  */
 
 typedef struct {
-    char locked;                // locked flag
-    linked_list_t *wait_list;   // linked list for threads waiting for this lock
+    char locked;                    // locked flag
+    linked_list_t *wait_list;       // linked list for threads waiting for this lock
+    linked_list_t *wait_list_tail;  // record the tail of the linked list
 } mutex_t;
 
 /* Initialize a mutex.
@@ -497,6 +526,7 @@ int uthread_mutex_init(uthread_mutex_t *mutex) {
     p = (mutex_t *) mutex;
     p->locked = 0;
     p->wait_list = NULL;
+    p->wait_list_tail = NULL;
 
     in_critical = 0;
     return 0;
@@ -540,7 +570,8 @@ int uthread_mutex_lock(uthread_mutex_t *mutex) {
         } else {
             uthread_t previous_thread_id;
 
-            linked_list_put_tail(&p->wait_list, current_thread_id, NULL);
+            // put the current thread to the wait list
+            linked_list_put_tail(&p->wait_list, &p->wait_list_tail, current_thread_id, NULL);
             previous_thread_id = current_thread_id;
             current_thread_id = get_ready_tid();
 
@@ -559,6 +590,8 @@ int uthread_mutex_unlock(uthread_mutex_t *mutex) {
     in_critical = 1;
 
     p = (mutex_t *) mutex;
+    // if the wait list is empty, set the locked to 0
+    // otherwise wake up a thread
     if (linked_list_is_empty(p->wait_list)) {
         p->locked = 0;
 
@@ -567,7 +600,7 @@ int uthread_mutex_unlock(uthread_mutex_t *mutex) {
     } else {
         uthread_t next_thread_id;
         
-        linked_list_get_head(&p->wait_list, &next_thread_id, NULL);
+        linked_list_get_head(&p->wait_list, &p->wait_list_tail, &next_thread_id, NULL);
         put_ready_tid(next_thread_id);
 
         in_critical = 0;
@@ -580,7 +613,8 @@ int uthread_mutex_unlock(uthread_mutex_t *mutex) {
  */
 
 typedef struct {
-    linked_list_t *wait_list;   // linked list for threads waiting for this conditional variable  
+    linked_list_t *wait_list;       // linked list for threads waiting for this conditional variable  
+    linked_list_t *wait_list_tail;  // record the tail of the linked list
 } cond_t;
 
 /* Initialize a conditional variable.
@@ -592,6 +626,7 @@ int uthread_cond_init(uthread_cond_t *cond) {
 
     p = (cond_t *) cond;
     p->wait_list = NULL;
+    p->wait_list_tail = NULL;
 
     in_critical = 0;
     return 0;
@@ -609,8 +644,10 @@ int uthread_cond_signal(uthread_cond_t *cond) {
         uthread_t next_thread_id;
         mutex_t *mutex;
 
-        linked_list_get_head(&p->wait_list, &next_thread_id, (void **) &mutex);
-        linked_list_put_tail(&mutex->wait_list, next_thread_id, NULL);
+        linked_list_get_head(&p->wait_list, &p->wait_list_tail, &next_thread_id, (void **) &mutex);
+        // put the thread from wait list of conditional variable to the
+        // wait list of mutex
+        linked_list_put_tail(&mutex->wait_list, &mutex->wait_list_tail, next_thread_id, NULL);
     }
 
     in_critical = 0;
@@ -629,8 +666,8 @@ int uthread_cond_broadcast(uthread_cond_t *cond) {
         uthread_t next_thread_id;
         mutex_t *mutex;
 
-        linked_list_get_head(&p->wait_list, &next_thread_id, (void **) &mutex);
-        linked_list_put_tail(&mutex->wait_list, next_thread_id, NULL);
+        linked_list_get_head(&p->wait_list, &p->wait_list_tail, &next_thread_id, (void **) &mutex);
+        linked_list_put_tail(&mutex->wait_list, &mutex->wait_list_tail, next_thread_id, NULL);
     }
 
     in_critical = 0;
@@ -646,8 +683,9 @@ int uthread_cond_wait(uthread_cond_t *cond, uthread_mutex_t *mutex) {
     in_critical = 1;
 
     p = (cond_t *) cond;
-    linked_list_put_tail(&p->wait_list, current_thread_id, (void *) mutex);
+    linked_list_put_tail(&p->wait_list, &p->wait_list_tail, current_thread_id, (void *) mutex);
 
+    // unlock the mutex and wait
     uthread_mutex_unlock(mutex);
 
     if (is_ready_queue_empty()) {

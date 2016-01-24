@@ -8,8 +8,8 @@
 
 #define UTHREAD_CANCELED ((void *) -1)
 
-#define UTHREAD_MUTEX_SIZE 16
-#define UTHREAD_COND_SIZE 8
+#define UTHREAD_MUTEX_SIZE 24
+#define UTHREAD_COND_SIZE 16
 
 typedef unsigned long int uthread_t;
 
