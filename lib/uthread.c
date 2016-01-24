@@ -744,7 +744,7 @@ int uthread_cond_init(uthread_cond_t *cond) {
     return 0;
 }
 
-/* Wake up one thread waiting for condition variable COND.
+/* Wake up one thread waiting for conditional variable COND.
  */
 int uthread_cond_signal(uthread_cond_t *cond) {
     cond_t *p;
@@ -766,7 +766,7 @@ int uthread_cond_signal(uthread_cond_t *cond) {
     return 0;
 }
 
-/* Wake up all threads waiting for condition variables COND.
+/* Wake up all threads waiting for conditional variables COND.
  */
 int uthread_cond_broadcast(uthread_cond_t *cond) {
     cond_t *p;
@@ -786,7 +786,7 @@ int uthread_cond_broadcast(uthread_cond_t *cond) {
     return 0;
 }
 
-/* Wait for condition variable COND to be signaled or broadcast.
+/* Wait for conditional variable COND to be signaled or broadcast.
  * MUTEX is assumed to be locked before.
  */
 int uthread_cond_wait(uthread_cond_t *cond, uthread_mutex_t *mutex) {
