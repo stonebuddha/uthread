@@ -21,7 +21,13 @@ Then there is a `libuthread.a` library, you can use the library by including `in
 
 # Design
 
-# Implementation
+The thread library has a preemptive round-robin scheduler with fixed-length time slices. I use `sigaction` to register `SIGPROF` with the scheduler, and `setitimer` to set up an interval timer to send signal `SIGPROF`. I use `ucontext_t` to store the context of the thread, and the thread control block contains a stack segment and some flags such as `valid`, `exited`, `joined`, `detached` and `canceled` besides the context. My implementation just allocate `POOL_SIZE` of thread control blocks globally (in the data segment of the thread library) and privately (cannot be accessed without library functions). I use `getcontext`, `makecontext`, `setcontext` and `swapcontext` to handle the context of each thread and thread context switching.
+
+For the round-robin scheduler, I use a FIFO queue to store the identifier of ready threads. Also, in order to make thread identifiers reusable, I use a FIFO queue to store the fresh thread identifiers, which mean identifiers that new threads can have. I initialize the thread library when the client code firstly invokes `uthread_create`. The private `uthread_init` gets information about the main thread and initializes some internal data structures. The thread routine is assumed to be the form `void *(*) (void *)`, which accepts a `void *` as an argument, and returns a `void *`. I use `thread_stub` to wrap the routine function, which simply invokes the routine and passes the returned value to `uthread_exit`.
+
+The design of library functions is much like the famous pthread, but some of the functions have different semantics. For example, my implementation of `uthread_cancel` doesn't promise the thread is cancelled immediately. The details can be found in the following section of document. Besides essential functions, I also implement a set of synchronization mechanisms: mutex, conditional variable, and semaphore. I use a singly linked list as the waiting list that these mechanisms need, and in order to use the singly linked list in a FIFO way, I record the tail of the list as well.
+
+At last, to avoid annoying race conditions, I use two methods. One is in the scheduler. When invoking `sigaction`, I block the signal `SIGPROF` so the scheduler won't be interrupted. The other is a global `in_critical` flag. At the beginning of all library routines, I set `in_critical` to 1, and before every return, I set `in_critical` back to 0. The scheduler checks `in_critical` firstly, and if that is 1, it then doesn't do thread context switch.
 
 # Document
 
@@ -35,7 +41,7 @@ It returns 0 on success, and `EAGAIN` if the thread pool is full.
 
 Terminate calling thread, and return `retval`.
 
-It will never return, but if there's no other ready thread, the whole process exits with 0.
+It never returns, but if there's no other ready thread, the whole process exits with 0.
 
 * `int uthread_join(uthread_t thread, void **retval)`
 
